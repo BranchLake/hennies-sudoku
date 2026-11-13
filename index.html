@@ -11,6 +11,7 @@
     --given: #1d1d1f; --solved: #2f6fde; --bad: #d43c3c; --bad-soft: #fbe3e3;
     --warn-soft: #fff1c9; --hint: #18a058; --cell: #ffffff; --cell-hl: #f0f2f6;
     --unit: #dde8fb; --blk: #ffd9b0; --tgt: #c9f0d8; --tgt-ring: #18a058; --note: #8a4fd8;
+    --player: #0f766e; --given-bg: rgba(0,0,0,0.055);
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
@@ -19,6 +20,7 @@
       --given: #ececef; --solved: #6ea0ff; --bad: #ff6b6b; --bad-soft: #4a2426;
       --warn-soft: #4a3f1d; --hint: #4cd08a; --cell: #1e1e22; --cell-hl: #26272c;
       --unit: #23324d; --blk: #5a3a18; --tgt: #1b4a31; --tgt-ring: #4cd08a; --note: #b48cff;
+      --player: #5eead4; --given-bg: rgba(255,255,255,0.07);
     }
   }
   * { box-sizing: border-box; }
@@ -67,6 +69,13 @@
   .cell.filled .notes, .cell.showc .notes { display: none; }
   .board.notemode .cell:focus-within { box-shadow: inset 0 0 0 3px var(--note); }
   #noteBtn.on { background: var(--note); border-color: var(--note); color: #fff; }
+  /* locked starting digits vs. digits the player writes */
+  .cell.locked { background-image: linear-gradient(var(--given-bg), var(--given-bg)); }
+  .cell.locked input { font-weight: 700; cursor: default; }
+  .board.haslock .cell:not(.locked) input:not(.solved):not(.hinted) { color: var(--player); font-weight: 500; }
+  #lockBtn.on { background: var(--ink); border-color: var(--ink); color: var(--panel); }
+  .lbl { font-size: 14px; color: var(--muted); }
+  .gen button { padding: 6px 12px; }
 
   .row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; align-items: center; }
   button { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink);
@@ -127,10 +136,17 @@
       <div class="row">
         <button class="go" id="hintBtn">Ledtråd</button>
         <button class="primary" id="solveBtn">Lös</button>
-        <button id="checkBtn">Kontrollera</button>
+        <button id="checkBtn">Kolla efter fel</button>
+        <button id="lockBtn" title="Gör de ifyllda siffrorna till fasta startsiffror">🔒 Lås pusslet</button>
         <button id="clearSolBtn">Rensa svar</button>
         <button id="clearBtn">Rensa allt</button>
-        <button id="exampleBtn">Exempel</button>
+      </div>
+      <div class="row gen">
+        <span class="lbl">Nytt pussel:</span>
+        <button data-level="easy">Lätt</button>
+        <button data-level="medium">Medium</button>
+        <button data-level="hard">Svår</button>
+        <button data-level="expert">Expert</button>
       </div>
       <div class="row">
         <button id="noteBtn" aria-pressed="false">✏️ Anteckningar: AV</button>
@@ -270,6 +286,9 @@ function onKey(e) {
     cells[((r + move[0] + 9) % 9) * 9 + (c + move[1] + 9) % 9].focus();
   } else if (e.key === 'a' || e.key === 'A') {
     e.preventDefault(); setNoteMode(!noteMode);
+  } else if (locked[i] && (/^[0-9]$/.test(e.key) || ['Backspace', 'Delete', ' '].includes(e.key))) {
+    e.preventDefault();
+    setStatus('Det här är en låst startsiffra. Tryck 🔓 Lås upp om du vill ändra pusslet.');
   } else if (/^[1-9]$/.test(e.key)) {
     e.preventDefault();
     if (noteMode) { toggleNote(i, +e.key); return; }
@@ -295,8 +314,42 @@ boardEl.addEventListener('focusout', () => setTimeout(() => {
   if (!boardEl.contains(document.activeElement)) wraps.forEach(el => el.classList.remove('peer'));
 }, 0));
 
-const readGrid = (onlyGivens) => cells.map(el =>
-  (onlyGivens && (el.classList.contains('solved') || el.classList.contains('hinted'))) ? 0 : (+el.value || 0));
+// onlyGivens: the puzzle's starting digits. When the puzzle is locked these are exactly the locked cells;
+// otherwise everything except digits filled in by Lös/Ledtråd.
+const readGrid = (onlyGivens) => cells.map((el, i) => {
+  if (!onlyGivens) return +el.value || 0;
+  if (isLocked) return locked[i] ? +el.value : 0;
+  return (el.classList.contains('solved') || el.classList.contains('hinted')) ? 0 : (+el.value || 0);
+});
+
+// ---- locking the starting digits
+const locked = new Array(81).fill(false);
+let isLocked = false;
+const lockBtn = document.getElementById('lockBtn');
+function setLocked(on) {
+  isLocked = on;
+  for (let i = 0; i < 81; i++) {
+    const el = cells[i];
+    locked[i] = on && !!el.value && !el.classList.contains('solved') && !el.classList.contains('hinted');
+    el.readOnly = locked[i];
+    wraps[i].classList.toggle('locked', locked[i]);
+  }
+  boardEl.classList.toggle('haslock', on);
+  lockBtn.classList.toggle('on', on);
+  lockBtn.textContent = on ? '🔓 Lås upp' : '🔒 Lås pusslet';
+}
+lockBtn.onclick = () => {
+  if (isLocked) { setLocked(false); setStatus('Upplåst — nu kan du ändra startsiffrorna. Lås igen när pusslet är klart.'); return; }
+  const g = readGrid(true), n = g.filter(Boolean).length;
+  if (!n) { setStatus('Skriv in eller läs in ett pussel först, och lås det sedan.', 'err'); return; }
+  if (findConflicts(g).size) { setStatus('Rätta de krockande siffrorna (röda) innan du låser.', 'err'); return; }
+  const r = solveGrid(g, 2);
+  if (!r.count) { setStatus('Pusslet saknar lösning — kolla om någon siffra är felskriven innan du låser.', 'err'); return; }
+  setLocked(true);
+  setStatus(r.count > 1
+    ? `Låst (${n} startsiffror). Obs: pusslet har flera lösningar, så felkollen jämför mot en av dem.`
+    : `Låst! ${n} startsiffror är nu fasta. Fyll i resten och tryck "Kolla efter fel" när du vill.`, r.count > 1 ? '' : 'ok');
+};
 
 function setStatus(msg, kind) { statusEl.textContent = msg; statusEl.className = 'status' + (kind ? ' ' + kind : ''); }
 
@@ -308,6 +361,7 @@ function findConflicts(g) {
 function afterEdit() {
   closeHint();
   const bad = findConflicts(readGrid());
+  if (isLocked) locked.forEach((l, i) => l && bad.delete(i));   // a locked digit is never the mistake
   wraps.forEach((el, i) => el.classList.toggle('conflict', bad.has(i)));
   if (bad.size) setStatus('Några siffror krockar (visas i rött).', 'err'); else setStatus('');
   renderCands();
@@ -372,7 +426,8 @@ function solveGrid(grid, limit = 2) {
 function analyse() {
   const givens = readGrid(true);
   const filled = givens.filter(Boolean).length;
-  if (findConflicts(readGrid()).size) { setStatus('Rätta de krockande siffrorna (röda) först.', 'err'); return null; }
+  // When locked, only the starting digits must be consistent; the player's own mistakes are reported by the caller.
+  if (findConflicts(isLocked ? givens : readGrid()).size) { setStatus('Rätta de krockande siffrorna (röda) först.', 'err'); return null; }
   if (filled < 17) setStatus(`Bara ${filled} ledtrådar — ett riktigt sudoku behöver minst 17. Försöker ändå…`);
   const res = solveGrid(givens, 2);
   if (!res.count) { setStatus('Pusslet saknar lösning. Kolla om någon siffra är felskriven eller felinläst.', 'err'); return null; }
@@ -387,6 +442,10 @@ function solve() {
 }
 
 function check() {
+  if (!isLocked) {
+    setStatus('Lås pusslet först (🔒 Lås pusslet), så vet jag vilka siffror som är startsiffror och vilka du har skrivit själv.', 'err');
+    return;
+  }
   const a = analyse(); if (!a) return;
   const cur = readGrid();
   const wrong = [];
@@ -454,7 +513,7 @@ function explainHidden(g, C, elimBy, u, d, i) {
   }
   steps.push({ final: true, text: `Bara en ruta återstår: ${cellName(i)}. Där måste ${d}:an stå!`,
     hl: { unit: u.cells, blk: blockers, tgt: [i], cand: [[i, d, 'em'], ...xs, ...byElim.map(([j]) => [j, d, 'x'])] } });
-  return { name: 'Gömd singel', where: unitName(u), i, d, steps, refs,
+  return { name: 'Gömd singel', where: unitName(u), i, d, steps, refs, level: u.type === 'box' ? 1 : 2,
     lesson: u.type === 'box' ? LESSONS.hiddenBox : LESSONS.hiddenLine };
 }
 
@@ -486,7 +545,7 @@ function explainNaked(g, C, elimBy, i, d) {
   }
   steps.push({ final: true, text: `Av 1–9 är bara ${d} kvar. Alltså är ${cellName(i)} = ${d}!`,
     hl: { tgt: [i], cand: [[i, d, 'em'], ...xsFor()] } });
-  return { name: 'Ensam kandidat', where: cellName(i), i, d, steps, refs, lesson: LESSONS.naked };
+  return { name: 'Ensam kandidat', where: cellName(i), i, d, steps, refs, level: 2, lesson: LESSONS.naked };
 }
 
 function findElimination(g, C) {
@@ -646,11 +705,82 @@ document.getElementById('clearSolBtn').onclick = () => {
   cells.forEach((el, i) => { if (el.classList.contains('solved') || el.classList.contains('hinted')) setCell(i, ''); });
   afterEdit();
 };
-document.getElementById('clearBtn').onclick = () => { cells.forEach((_, i) => setCell(i, '')); clearNotes(); afterEdit(); };
-document.getElementById('exampleBtn').onclick = () => {
-  const p = '530070000600195000098000060800060003400803001700020006060000280000419005000080079';
-  [...p].forEach((ch, i) => setCell(i, ch === '0' ? '' : ch)); clearNotes(); afterEdit();
+document.getElementById('clearBtn').onclick = () => { setLocked(false); cells.forEach((_, i) => setCell(i, '')); clearNotes(); afterEdit(); };
+function loadPuzzle(p, lock) {
+  setLocked(false);
+  [...p].forEach((ch, i) => setCell(i, +ch ? String(ch) : ''));
+  clearNotes(); afterEdit();
+  if (lock) setLocked(true);
+}
+
+// ================================================================ Puzzle generator
+// 1) build a random complete grid, 2) remove digits in symmetric pairs as long as the solution stays unique,
+// 3) grade it by letting the hint engine solve it like a person would, and keep it if the grade matches.
+const LEVELS = {
+  easy:   { name: 'lätt pussel',        target: 40, want: 1 },  // only hidden singles in boxes
+  medium: { name: 'medelsvårt pussel',  target: 31, want: 2 },  // needs singles in rows/columns or naked singles
+  hard:   { name: 'svårt pussel',       target: 0,  want: 3 },  // needs pointing pairs / box-line / naked pairs
+  expert: { name: 'expertpussel',       target: 0,  want: 4 },  // needs techniques beyond what the hints explain
 };
+function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+function randomFull() {
+  const g = new Array(81).fill(0);
+  (function fill(i) {
+    if (i === 81) return true;
+    for (const d of shuffle([1, 2, 3, 4, 5, 6, 7, 8, 9])) {
+      if (PEERS[i].every(j => g[j] !== d)) { g[i] = d; if (fill(i + 1)) return true; }
+    }
+    g[i] = 0; return false;
+  })(0);
+  return g;
+}
+function carve(full, target) {
+  const g = full.slice();
+  let clues = 81;
+  for (const i of shuffle([...Array(41).keys()])) {
+    if (clues <= target) break;
+    const j = 80 - i, a = g[i], b = g[j];
+    g[i] = 0; g[j] = 0;
+    if (solveGrid(g, 2).count !== 1) { g[i] = a; g[j] = b; } else clues -= i === j ? 1 : 2;
+  }
+  return g;
+}
+// 1 = hidden singles in boxes only, 2 = other singles, 3 = elimination techniques, 4 = beyond the hint engine
+function grade(p) {
+  const g = p.slice(); let lvl = 1;
+  while (g.includes(0)) {
+    const h = buildHint(g);
+    if (!h) return 4;
+    lvl = Math.max(lvl, h.elims.length ? 3 : h.single.level);
+    g[h.single.i] = h.single.d;
+  }
+  return lvl;
+}
+const genButtons = [...document.querySelectorAll('[data-level]')];
+async function generate(key) {
+  const L = LEVELS[key];
+  genButtons.forEach(b => b.disabled = true);
+  setStatus(`Skapar ett ${L.name}…`);
+  await new Promise(r => setTimeout(r, 30));
+  const t0 = performance.now();
+  let best = null;
+  while (performance.now() - t0 < 20000) {
+    for (let k = 0; k < 2; k++) {
+      const p = carve(randomFull(), L.target), lvl = grade(p);
+      if (!best || Math.abs(lvl - L.want) < Math.abs(best.lvl - L.want)) best = { p, lvl };
+      if (lvl === L.want) break;
+    }
+    if (best.lvl === L.want) break;
+    await new Promise(r => setTimeout(r, 0));   // keep the page responsive
+  }
+  loadPuzzle(best.p.join(''), true);
+  genButtons.forEach(b => b.disabled = false);
+  const clues = best.p.filter(Boolean).length;
+  setStatus(best.lvl === L.want
+    ? `Nytt ${L.name} med ${clues} startsiffror (låsta). Lycka till!`
+    : `Hittade inget perfekt ${L.name} i tid — det här är det närmaste (${clues} startsiffror).`, 'ok');
+}
+genButtons.forEach(b => b.onclick = () => generate(b.dataset.level));
 
 // ================================================================ Photo import
 const drop = document.getElementById('drop'), fileInput = document.getElementById('fileInput');
@@ -918,14 +1048,13 @@ document.getElementById('readBtn').onclick = async () => {
       else lowConf.add(jobs[k].i);
       progressEl.value = (k + 1) / jobs.length;
     }
-    results.forEach((v, i) => setCell(i, v ? String(v) : ''));
-    clearNotes(); afterEdit();
+    loadPuzzle(results.join(''), false);
     lowConf.forEach(i => wraps[i].classList.add('lowconf'));
     const res = solveGrid(results, 2);
     const note = lowConf.size ? ` ${lowConf.size} osäker${lowConf.size > 1 ? 'a' : ''} ruta${lowConf.size > 1 ? 'or' : ''} markerade gula.` : '';
     if (findConflicts(results).size || !res.count)
       photoMsg(`Läste ${jobs.length} siffror, men pusslet går inte ihop än — rätta de felinlästa rutorna.${note}`, 'err');
-    else photoMsg(`Läste ${jobs.length} siffror.${note} Jämför med bilden och tryck sedan Ledtråd eller Lös.`, 'ok');
+    else photoMsg(`Läste ${jobs.length} siffror.${note} Jämför med bilden, rätta om något blev fel och tryck sedan 🔒 Lås pusslet.`, 'ok');
   } catch (err) {
     console.error(err); photoMsg(err.message || String(err), 'err');
   } finally {
