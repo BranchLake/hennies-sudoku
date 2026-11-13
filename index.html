@@ -155,6 +155,7 @@
       <div class="status" id="status"></div>
       <div class="keys">
         <kbd>1</kbd>–<kbd>9</kbd> skriv &nbsp; <kbd>0</kbd>/<kbd>Del</kbd> sudda &nbsp; piltangenter flyttar &nbsp; <kbd>H</kbd> ledtråd &nbsp; <kbd>A</kbd> anteckningsläge på/av (skriv flera små siffror i en ruta)
+        <br>💾 Pusslet, dina siffror och anteckningar sparas automatiskt i den här webbläsaren.
       </div>
     </section>
 
@@ -262,7 +263,7 @@ function setCell(i, v, kind) {
 const notes = new Array(81).fill(0);
 let noteMode = false;
 const noteBtn = document.getElementById('noteBtn');
-function renderNote(i) { wraps[i].children[1].textContent = digitsOf(notes[i]).join(' '); }
+function renderNote(i) { wraps[i].children[1].textContent = digitsOf(notes[i]).join(' '); saveSoon(); }
 function clearNotes() { notes.fill(0); for (let i = 0; i < 81; i++) renderNote(i); }
 function toggleNote(i, d) {
   if (cells[i].value) { setStatus('Rutan har redan en siffra — sudda den först om du vill anteckna där.'); return; }
@@ -274,6 +275,7 @@ function setNoteMode(on) {
   noteBtn.setAttribute('aria-pressed', on);
   noteBtn.textContent = `✏️ Anteckningar: ${on ? 'PÅ' : 'AV'}`;
   boardEl.classList.toggle('notemode', on);
+  saveSoon();
   setStatus(on ? 'Anteckningsläge: siffror du skriver blir små anteckningar (skriv samma igen för att ta bort). Tryck A för att stänga av.' : '');
 }
 noteBtn.onmousedown = e => e.preventDefault();   // keep focus on the selected cell
@@ -326,17 +328,21 @@ const readGrid = (onlyGivens) => cells.map((el, i) => {
 const locked = new Array(81).fill(false);
 let isLocked = false;
 const lockBtn = document.getElementById('lockBtn');
-function setLocked(on) {
+// mask (optional): exactly which cells to lock — used when restoring a saved game,
+// so the player's own digits don't become locked.
+function setLocked(on, mask) {
   isLocked = on;
   for (let i = 0; i < 81; i++) {
     const el = cells[i];
-    locked[i] = on && !!el.value && !el.classList.contains('solved') && !el.classList.contains('hinted');
+    locked[i] = on && !!el.value && (mask ? !!mask[i]
+      : !el.classList.contains('solved') && !el.classList.contains('hinted'));
     el.readOnly = locked[i];
     wraps[i].classList.toggle('locked', locked[i]);
   }
   boardEl.classList.toggle('haslock', on);
   lockBtn.classList.toggle('on', on);
   lockBtn.textContent = on ? '🔓 Lås upp' : '🔒 Lås pusslet';
+  saveSoon();
 }
 lockBtn.onclick = () => {
   if (isLocked) { setLocked(false); setStatus('Upplåst — nu kan du ändra startsiffrorna. Lås igen när pusslet är klart.'); return; }
@@ -365,6 +371,7 @@ function afterEdit() {
   wraps.forEach((el, i) => el.classList.toggle('conflict', bad.has(i)));
   if (bad.size) setStatus('Några siffror krockar (visas i rött).', 'err'); else setStatus('');
   renderCands();
+  saveSoon();
 }
 
 // ---- candidate (pencil-mark) layer
@@ -1061,6 +1068,48 @@ document.getElementById('readBtn').onclick = async () => {
     btn.disabled = false; progressEl.style.display = 'none';
   }
 };
+
+// ================================================================ Auto-save
+// The current game (digits, which ones are locked / solved / hinted, notes and settings) is stored in this
+// browser's localStorage, so reloading the page brings it back. Nothing is sent anywhere.
+var SAVE_KEY = 'hennies-sudoku-v1', saveTimer = null, restoring = false;
+function saveSoon() {
+  if (restoring) return;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(saveState, 150);
+}
+function saveState() {
+  const state = {
+    v: cells.map(c => c.value || '0').join(''),
+    k: cells.map(c => c.classList.contains('solved') ? 's' : c.classList.contains('hinted') ? 'h' : '-').join(''),
+    locked: isLocked ? locked.map(l => l ? '1' : '0').join('') : null,
+    notes: notes.slice(),
+    noteMode, cands: candToggle.checked, saved: Date.now(),
+  };
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify(state)); } catch (e) { /* private mode / storage full */ }
+}
+function restoreState() {
+  let s = null;
+  try { s = JSON.parse(localStorage.getItem(SAVE_KEY)); } catch (e) { return; }
+  if (!s || typeof s.v !== 'string' || !/^[0-9]{81}$/.test(s.v)) return;
+  restoring = true;
+  try {
+    [...s.v].forEach((ch, i) => {
+      const k = typeof s.k === 'string' ? s.k[i] : '-';
+      setCell(i, +ch ? ch : '', k === 's' ? 'solved' : k === 'h' ? 'hinted' : undefined);
+    });
+    if (Array.isArray(s.notes)) s.notes.slice(0, 81).forEach((m, i) => { notes[i] = (m | 0) & 0x3FE; renderNote(i); });
+    candToggle.checked = !!s.cands;
+    if (typeof s.locked === 'string' && s.locked.length === 81) setLocked(true, [...s.locked].map(c => c === '1'));
+    afterEdit();
+    if (s.noteMode) setNoteMode(true);
+  } finally {
+    restoring = false;
+  }
+  if (/[1-9]/.test(s.v)) setStatus('Välkommen tillbaka! Ditt senaste pussel är återställt.', 'ok');
+}
+candToggle.addEventListener('change', saveSoon);
+restoreState();
 </script>
 </body>
 </html>
