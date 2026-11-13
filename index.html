@@ -1,0 +1,894 @@
+<!doctype html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hennie's sudokulösare</title>
+<style>
+  :root {
+    --bg: #f6f5f1; --panel: #ffffff; --ink: #1d1d1f; --muted: #6b6b70;
+    --line: #d8d6cf; --thick: #2b2b2e; --accent: #2f6fde; --accent-soft: #e4edfc;
+    --given: #1d1d1f; --solved: #2f6fde; --bad: #d43c3c; --bad-soft: #fbe3e3;
+    --warn-soft: #fff1c9; --hint: #18a058; --cell: #ffffff; --cell-hl: #f0f2f6;
+    --unit: #dde8fb; --blk: #ffd9b0; --tgt: #c9f0d8; --tgt-ring: #18a058;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141416; --panel: #1e1e22; --ink: #ececef; --muted: #9a9aa2;
+      --line: #3a3a40; --thick: #c9c9d0; --accent: #6ea0ff; --accent-soft: #24304a;
+      --given: #ececef; --solved: #6ea0ff; --bad: #ff6b6b; --bad-soft: #4a2426;
+      --warn-soft: #4a3f1d; --hint: #4cd08a; --cell: #1e1e22; --cell-hl: #26272c;
+      --unit: #23324d; --blk: #5a3a18; --tgt: #1b4a31; --tgt-ring: #4cd08a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 1080px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 26px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .layout { display: grid; grid-template-columns: minmax(0, 480px) minmax(0, 1fr); gap: 24px; align-items: start; }
+  @media (max-width: 880px) { .layout { grid-template-columns: 1fr; } }
+  .side { display: grid; gap: 24px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  .panel h2 { font-size: 15px; margin: 0 0 12px; }
+
+  /* ---- board ---- */
+  .board { display: grid; grid-template-columns: repeat(9, 1fr); aspect-ratio: 1;
+    border: 2px solid var(--thick); border-radius: 4px; overflow: hidden; width: 100%; }
+  .cell { position: relative; aspect-ratio: 1; background: var(--cell);
+    border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); transition: background .15s; }
+  .cell:nth-child(9n) { border-right: 0; }
+  .cell:nth-child(9n+3), .cell:nth-child(9n+6) { border-right: 2px solid var(--thick); }
+  .cell:nth-child(n+19):nth-child(-n+27), .cell:nth-child(n+46):nth-child(-n+54) { border-bottom: 2px solid var(--thick); }
+  .cell:nth-child(n+73) { border-bottom: 0; }
+  .cell input { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; margin: 0; padding: 0;
+    background: transparent; color: var(--given); text-align: center;
+    font: 600 clamp(16px, 4.6vw, 26px)/1 system-ui, sans-serif; caret-color: transparent; outline: none; z-index: 1; }
+  .cell input.solved { color: var(--solved); font-weight: 400; }
+  .cell input.hinted { color: var(--hint); font-weight: 600; }
+  .cell.peer { background: var(--cell-hl); }
+  .cell:focus-within { background: var(--accent-soft); }
+  .cell.u { background: var(--unit); }
+  .cell.blk { background: var(--blk); }
+  .cell.tgt { background: var(--tgt); box-shadow: inset 0 0 0 3px var(--tgt-ring); }
+  .cell.conflict { background: var(--bad-soft); }
+  .cell.conflict input { color: var(--bad); }
+  .cell.lowconf { background: var(--warn-soft); }
+  .cands { position: absolute; inset: 2px; display: grid; grid-template-columns: repeat(3, 1fr);
+    font: 500 clamp(8px, 1.6vw, 11px)/1 system-ui, sans-serif; color: var(--muted); pointer-events: none; }
+  .cands span { display: flex; align-items: center; justify-content: center; visibility: hidden; }
+  .cands span.on { visibility: visible; }
+  .cands span.em { visibility: visible; color: var(--accent); font-weight: 800; font-size: 1.25em; }
+  .cands span.x { visibility: visible; color: var(--bad); text-decoration: line-through; font-weight: 700; }
+
+  .row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; align-items: center; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+    padding: 8px 14px; border-radius: 8px; cursor: pointer; }
+  button:hover { border-color: var(--muted); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.go { background: var(--hint); border-color: var(--hint); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  label.toggle { display: inline-flex; gap: 6px; align-items: center; font-size: 14px; color: var(--muted); cursor: pointer; }
+  .status { margin-top: 12px; min-height: 22px; font-size: 14px; color: var(--muted); }
+  .status.ok { color: var(--hint); } .status.err { color: var(--bad); }
+  .keys { font-size: 13px; color: var(--muted); margin-top: 10px; }
+  kbd { font: 12px ui-monospace, monospace; border: 1px solid var(--line); border-bottom-width: 2px;
+    border-radius: 4px; padding: 0 5px; background: var(--panel); }
+
+  /* ---- hint panel ---- */
+  #hintPanel[hidden] { display: none; }
+  .hint-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .tech { font-weight: 700; font-size: 17px; }
+  .tech small { font-weight: 500; color: var(--muted); font-size: 13px; }
+  .xbtn { border: 0; padding: 2px 8px; font-size: 18px; color: var(--muted); background: none; }
+  #hintSteps { list-style: none; padding: 0; margin: 12px 0 0; display: grid; gap: 8px; counter-reset: s; }
+  #hintSteps li { counter-increment: s; position: relative; padding: 10px 12px 10px 40px; border-radius: 8px;
+    border: 1px solid var(--line); cursor: pointer; }
+  #hintSteps li::before { content: counter(s); position: absolute; left: 10px; top: 9px; width: 22px; height: 22px;
+    border-radius: 50%; background: var(--line); color: var(--ink); font-size: 12px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center; }
+  #hintSteps li.prep { border-style: dashed; }
+  #hintSteps li.active { border-color: var(--accent); background: var(--accent-soft); }
+  #hintSteps li.active::before { background: var(--accent); color: #fff; }
+  #hintSteps li.final.active { border-color: var(--hint); }
+  #hintSteps li.final.active::before { background: var(--hint); }
+  .legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; color: var(--muted); margin-top: 12px; }
+  .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; margin-right: 4px; }
+  .lesson { margin: 12px 0 0; padding: 10px 12px; border-left: 3px solid var(--hint); background: var(--cell-hl);
+    border-radius: 0 8px 8px 0; font-size: 14px; }
+  .lesson[hidden] { display: none; }
+
+  /* ---- photo ---- */
+  .drop { border: 2px dashed var(--line); border-radius: 10px; padding: 22px 16px; text-align: center;
+    color: var(--muted); cursor: pointer; transition: border-color .15s, background .15s; }
+  .drop.over { border-color: var(--accent); background: var(--accent-soft); }
+  .drop strong { color: var(--ink); }
+  #photoArea { display: none; margin-top: 14px; }
+  #photoCanvas { width: 100%; height: auto; border-radius: 8px; touch-action: none; cursor: crosshair; display: block; }
+  .hint-text { font-size: 13px; color: var(--muted); margin: 8px 0 0; }
+  progress { width: 100%; height: 6px; margin-top: 10px; display: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Hennie's sudokulösare</h1>
+  <p class="sub">Skriv in ett pussel eller importera ett foto. Använd <strong>Ledtråd</strong> för att lära dig hur man tänker, steg för steg — eller tryck <strong>Lös</strong> för hela svaret.</p>
+
+  <div class="layout">
+    <section class="panel">
+      <div class="board" id="board" aria-label="Sudokurutnät"></div>
+      <div class="row">
+        <button class="go" id="hintBtn">Ledtråd</button>
+        <button class="primary" id="solveBtn">Lös</button>
+        <button id="checkBtn">Kontrollera</button>
+        <button id="clearSolBtn">Rensa svar</button>
+        <button id="clearBtn">Rensa allt</button>
+        <button id="exampleBtn">Exempel</button>
+      </div>
+      <div class="row">
+        <label class="toggle"><input type="checkbox" id="candToggle"> Visa kandidater (små siffror som fortfarande är möjliga)</label>
+      </div>
+      <div class="status" id="status"></div>
+      <div class="keys">
+        <kbd>1</kbd>–<kbd>9</kbd> skriv &nbsp; <kbd>0</kbd>/<kbd>Del</kbd> sudda &nbsp; piltangenter flyttar &nbsp; <kbd>H</kbd> ledtråd
+      </div>
+    </section>
+
+    <div class="side">
+      <section class="panel" id="hintPanel" hidden>
+        <div class="hint-head">
+          <div class="tech" id="hintTitle"></div>
+          <button class="xbtn" id="hintClose" aria-label="Stäng ledtråd">✕</button>
+        </div>
+        <ol id="hintSteps"></ol>
+        <div class="row">
+          <button class="primary" id="nextStepBtn">Nästa steg</button>
+          <button class="go" id="applyHintBtn">Sätt in siffran</button>
+        </div>
+        <p class="lesson" id="hintLesson" hidden></p>
+        <div class="legend">
+          <span><i style="background:var(--unit)"></i>området vi tittar på</span>
+          <span><i style="background:var(--blk)"></i>siffror som blockerar</span>
+          <span><i style="background:var(--tgt);box-shadow:inset 0 0 0 2px var(--tgt-ring)"></i>svaret</span>
+          <span>R3K5 = rad 3 (uppifrån), kolumn 5 (från vänster)</span>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Importera från en bild</h2>
+        <div class="drop" id="drop">
+          <strong>Släpp en bild här</strong>, klicka för att välja en, eller klistra in med <kbd>Ctrl</kbd>+<kbd>V</kbd>
+          <input type="file" id="fileInput" accept="image/*" capture="environment" hidden>
+        </div>
+        <div id="photoArea">
+          <canvas id="photoCanvas"></canvas>
+          <p class="hint-text">Dra de fyra blå hörnen till sudokurutnätets yttre hörn och läs sedan in siffrorna.</p>
+          <div class="row">
+            <button class="primary" id="readBtn">Läs in siffrorna</button>
+            <button id="autoBtn">Hitta hörnen igen</button>
+          </div>
+          <progress id="progress" max="1" value="0"></progress>
+          <div class="status" id="photoStatus"></div>
+        </div>
+        <p class="hint-text">Sifferigenkänningen körs i din webbläsare (Tesseract OCR). Rutor den var osäker på markeras gula — dubbelkolla dem innan du löser.</p>
+      </section>
+    </div>
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+<script>
+// ================================================================ Geometry helpers
+const ROW = [], COL = [], BOX = [];
+const boxOf = i => Math.floor(Math.floor(i / 9) / 3) * 3 + Math.floor((i % 9) / 3);
+for (let i = 0; i < 81; i++) { ROW[i] = Math.floor(i / 9); COL[i] = i % 9; BOX[i] = boxOf(i); }
+const PEERS = [];
+for (let i = 0; i < 81; i++) {
+  PEERS[i] = [];
+  for (let j = 0; j < 81; j++) if (j !== i && (ROW[j] === ROW[i] || COL[j] === COL[i] || BOX[j] === BOX[i])) PEERS[i].push(j);
+}
+const BOXNAMES = ['övre vänstra', 'övre mittersta', 'övre högra', 'mellersta vänstra', 'mittersta',
+  'mellersta högra', 'nedre vänstra', 'nedre mittersta', 'nedre högra'];
+const UNITS = [];
+for (let n = 0; n < 9; n++) UNITS.push({ type: 'box', n, cells: [...Array(81).keys()].filter(i => BOX[i] === n) });
+for (let n = 0; n < 9; n++) UNITS.push({ type: 'row', n, cells: [...Array(81).keys()].filter(i => ROW[i] === n) });
+for (let n = 0; n < 9; n++) UNITS.push({ type: 'col', n, cells: [...Array(81).keys()].filter(i => COL[i] === n) });
+const unitName = u => u.type === 'row' ? `rad ${u.n + 1}` : u.type === 'col' ? `kolumn ${u.n + 1}` : `den ${BOXNAMES[u.n]} boxen`;
+const cellName = i => `R${ROW[i] + 1}K${COL[i] + 1}`;
+const popcount = m => { let n = 0; while (m) { m &= m - 1; n++; } return n; };
+const digitsOf = m => [1, 2, 3, 4, 5, 6, 7, 8, 9].filter(d => m & (1 << d));
+const listSv = a => a.length <= 1 ? a.join('') : a.slice(0, -1).join(', ') + ' och ' + a[a.length - 1];
+
+// ================================================================ Board UI
+const boardEl = document.getElementById('board');
+const statusEl = document.getElementById('status');
+const cells = [], wraps = [];
+for (let i = 0; i < 81; i++) {
+  const w = document.createElement('div'); w.className = 'cell';
+  const cands = document.createElement('div'); cands.className = 'cands';
+  for (let d = 1; d <= 9; d++) { const s = document.createElement('span'); s.textContent = d; cands.appendChild(s); }
+  const inp = document.createElement('input');
+  inp.inputMode = 'numeric'; inp.maxLength = 1; inp.autocomplete = 'off';
+  inp.setAttribute('aria-label', `Rad ${ROW[i] + 1}, kolumn ${COL[i] + 1}`);
+  inp.dataset.i = i;
+  inp.addEventListener('keydown', onKey);
+  inp.addEventListener('input', () => { setCell(i, inp.value.replace(/[^1-9]/g, '').slice(-1)); afterEdit(); });
+  inp.addEventListener('focus', () => highlightPeers(i));
+  w.append(cands, inp);
+  boardEl.appendChild(w);
+  cells.push(inp); wraps.push(w);
+}
+
+function setCell(i, v, kind) {
+  const c = cells[i];
+  c.value = v || '';
+  c.classList.remove('solved', 'hinted');
+  wraps[i].classList.remove('lowconf');
+  if (v && kind) c.classList.add(kind);
+}
+function onKey(e) {
+  const i = +e.target.dataset.i, r = ROW[i], c = COL[i];
+  const move = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] }[e.key];
+  if (move) {
+    e.preventDefault();
+    cells[((r + move[0] + 9) % 9) * 9 + (c + move[1] + 9) % 9].focus();
+  } else if (/^[1-9]$/.test(e.key)) {
+    e.preventDefault(); setCell(i, e.key); afterEdit();
+    if (c < 8) cells[i + 1].focus();
+  } else if (['Backspace', 'Delete', '0', ' '].includes(e.key)) {
+    e.preventDefault(); setCell(i, ''); afterEdit();
+    if (e.key === 'Backspace' && c > 0) cells[i - 1].focus();
+  } else if (e.key === 'Enter') {
+    e.preventDefault(); solve();
+  } else if (e.key === 'h' || e.key === 'H') {
+    e.preventDefault(); hintClick();
+  } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
+    e.preventDefault();
+  }
+}
+function highlightPeers(i) {
+  wraps.forEach((el, j) => el.classList.toggle('peer', PEERS[i].includes(j)));
+}
+boardEl.addEventListener('focusout', () => setTimeout(() => {
+  if (!boardEl.contains(document.activeElement)) wraps.forEach(el => el.classList.remove('peer'));
+}, 0));
+
+const readGrid = (onlyGivens) => cells.map(el =>
+  (onlyGivens && (el.classList.contains('solved') || el.classList.contains('hinted'))) ? 0 : (+el.value || 0));
+
+function setStatus(msg, kind) { statusEl.textContent = msg; statusEl.className = 'status' + (kind ? ' ' + kind : ''); }
+
+function findConflicts(g) {
+  const bad = new Set();
+  for (let i = 0; i < 81; i++) if (g[i]) for (const j of PEERS[i]) if (g[j] === g[i]) { bad.add(i); bad.add(j); }
+  return bad;
+}
+function afterEdit() {
+  closeHint();
+  const bad = findConflicts(readGrid());
+  wraps.forEach((el, i) => el.classList.toggle('conflict', bad.has(i)));
+  if (bad.size) setStatus('Några siffror krockar (visas i rött).', 'err'); else setStatus('');
+  renderCands();
+}
+
+// ---- candidate (pencil-mark) layer
+const candToggle = document.getElementById('candToggle');
+candToggle.onchange = () => renderCands(currentHL?.cand);
+function baseCands(g) {
+  return g.map((v, i) => {
+    if (v) return 0;
+    let seen = 0; for (const j of PEERS[i]) if (g[j]) seen |= 1 << g[j];
+    return ~seen & 0x3FE;
+  });
+}
+function renderCands(extra) {
+  const g = readGrid();
+  const C = candToggle.checked ? baseCands(g) : null;
+  wraps.forEach((w, i) => {
+    const spans = w.firstChild.children;
+    for (let d = 1; d <= 9; d++) spans[d - 1].className = (C && C[i] & (1 << d)) ? 'on' : '';
+  });
+  (extra || []).forEach(([i, d, cls]) => { if (!g[i]) wraps[i].firstChild.children[d - 1].className = cls; });
+}
+
+// ================================================================ Brute-force solver (for Lös / Kontrollera)
+function solveGrid(grid, limit = 2) {
+  const g = grid.slice();
+  const rows = new Array(9).fill(0), cols = new Array(9).fill(0), boxes = new Array(9).fill(0);
+  for (let i = 0; i < 81; i++) {
+    const v = g[i]; if (!v) continue;
+    const bit = 1 << v;
+    if ((rows[ROW[i]] | cols[COL[i]] | boxes[BOX[i]]) & bit) return { count: 0, solution: null };
+    rows[ROW[i]] |= bit; cols[COL[i]] |= bit; boxes[BOX[i]] |= bit;
+  }
+  let count = 0, solution = null, nodes = 0;
+  (function search() {
+    if (++nodes > 2e6) return;
+    let best = -1, bestMask = 0, bestN = 10;
+    for (let i = 0; i < 81; i++) {
+      if (g[i]) continue;
+      const mask = ~(rows[ROW[i]] | cols[COL[i]] | boxes[BOX[i]]) & 0x3FE;
+      const n = popcount(mask);
+      if (n < bestN) { best = i; bestMask = mask; bestN = n; if (n <= 1) break; }
+    }
+    if (best === -1) { count++; if (!solution) solution = g.slice(); return; }
+    if (bestN === 0) return;
+    for (let v = 1; v <= 9; v++) {
+      const bit = 1 << v;
+      if (!(bestMask & bit)) continue;
+      g[best] = v; rows[ROW[best]] |= bit; cols[COL[best]] |= bit; boxes[BOX[best]] |= bit;
+      search();
+      g[best] = 0; rows[ROW[best]] &= ~bit; cols[COL[best]] &= ~bit; boxes[BOX[best]] &= ~bit;
+      if (count >= limit) return;
+    }
+  })();
+  return { count, solution };
+}
+
+function analyse() {
+  const givens = readGrid(true);
+  const filled = givens.filter(Boolean).length;
+  if (findConflicts(readGrid()).size) { setStatus('Rätta de krockande siffrorna (röda) först.', 'err'); return null; }
+  if (filled < 17) setStatus(`Bara ${filled} ledtrådar — ett riktigt sudoku behöver minst 17. Försöker ändå…`);
+  const res = solveGrid(givens, 2);
+  if (!res.count) { setStatus('Pusslet saknar lösning. Kolla om någon siffra är felskriven eller felinläst.', 'err'); return null; }
+  return { givens, ...res };
+}
+
+function solve() {
+  const a = analyse(); if (!a) return;
+  a.solution.forEach((v, i) => { if (!a.givens[i] && !cells[i].classList.contains('hinted')) setCell(i, String(v), 'solved'); });
+  afterEdit();
+  setStatus(a.count > 1 ? 'Löst — men pusslet har mer än en lösning, så det här är en av dem.' : 'Löst!', a.count > 1 ? '' : 'ok');
+}
+
+function check() {
+  const a = analyse(); if (!a) return;
+  const cur = readGrid();
+  const wrong = [];
+  cur.forEach((v, i) => { if (v && !a.givens[i] && v !== a.solution[i]) wrong.push(i); });
+  wraps.forEach((el, i) => el.classList.toggle('conflict', wrong.includes(i)));
+  const empty = cur.filter(v => !v).length;
+  if (wrong.length) setStatus(`${wrong.length} fel siffr${wrong.length > 1 ? 'or' : 'a'} (röda).`, 'err');
+  else setStatus(empty ? `Allt rätt hittills — ${empty} rutor kvar.` : 'Klart och rätt! Snyggt!', 'ok');
+}
+
+// ================================================================ Human-style hint engine
+// Looks for the simplest logical step a person could find, and explains it as a list of steps.
+// Order: hidden single in a box → hidden single in a row/column → naked single.
+// If none exists, it uses elimination techniques (pointing pair, box/line, naked pair) to remove
+// candidates first, and records those as preparation steps.
+
+const LESSONS = {
+  hiddenBox: 'Gömd singel: välj en siffra och en box. Leta upp alla ställen där siffran redan finns i närheten — varje sådan siffra blockerar hela sin rad och kolumn. Om bara en ruta i boxen blir kvar, måste siffran stå där. Det här är den viktigaste tekniken — börja alltid här!',
+  hiddenLine: 'Gömd singel i rad/kolumn: samma idé som i boxar. Om en siffra saknas i en rad (eller kolumn) och alla rutor utom en är blockerade eller fyllda, måste siffran stå i den sista rutan.',
+  naked: 'Ensam kandidat: titta på en ruta och räkna vilka siffror som redan finns i dess rad, kolumn och box. Om åtta av nio siffror är upptagna, är den nionde svaret. Funkar bäst på rutor i ganska fulla rader/kolumner.',
+  pointing: 'Pekande par/trippel: om en siffra i en box bara kan stå längs en och samma rad (eller kolumn), så "pekar" den ut ur boxen och stryker siffran i resten av raden.',
+  claiming: 'Rad/box-låsning: om en siffra i en rad (eller kolumn) bara kan stå inom en enda box, så kan den inte stå någon annanstans i den boxen.',
+  pair: 'Nakna par: två rutor i samma område som båda bara kan vara samma två siffror "lånar" de siffrorna — inga andra rutor i området kan ha dem.',
+};
+
+function findSingle(g, C, elimBy) {
+  for (const u of UNITS) {
+    let missing = 0x3FE;
+    for (const j of u.cells) if (g[j]) missing &= ~(1 << g[j]);
+    for (const d of digitsOf(missing)) {
+      const spots = u.cells.filter(j => C[j] & (1 << d));
+      if (spots.length === 1) return explainHidden(g, C, elimBy, u, d, spots[0]);
+    }
+  }
+  for (let i = 0; i < 81; i++) if (!g[i] && popcount(C[i]) === 1) return explainNaked(g, C, elimBy, i, digitsOf(C[i])[0]);
+  return null;
+}
+
+function explainHidden(g, C, elimBy, u, d, i) {
+  const steps = [], refs = new Set();
+  steps.push({ text: `Titta på ${unitName(u)}. Siffran ${d} saknas där — var i ${unitName(u)} kan ${d}:an stå?`,
+    hl: { unit: u.cells } });
+  const blockers = [], blocked = [], byElim = [], filled = [];
+  for (const j of u.cells) {
+    if (j === i) continue;
+    if (g[j]) { filled.push(j); continue; }
+    let k = blockers.find(k => PEERS[j].includes(k));
+    if (k === undefined) k = PEERS[j].find(k => g[k] === d);
+    if (k !== undefined) { if (!blockers.includes(k)) blockers.push(k); blocked.push(j); continue; }
+    const st = elimBy.get(j * 10 + d); refs.add(st); byElim.push([j, st]);
+  }
+  const xs = blocked.map(j => [j, d, 'x']);
+  if (blockers.length) {
+    steps.push({ text: `${d}:an finns redan på ${listSv(blockers.map(cellName))} (orange). En ${d}:a blockerar hela sin rad, kolumn och box — så ${d} kan inte stå i de rutor där det står ett rött överstruket ${d}.`,
+      hl: { unit: u.cells, blk: blockers, cand: xs } });
+  }
+  if (byElim.length) {
+    const stepsRef = [...new Set(byElim.map(([, s]) => s))].sort((a, b) => a - b);
+    steps.push({ text: `Från förberedelsen (steg ${listSv(stepsRef.map(String))}) vet vi att ${d} inte heller kan stå på ${listSv(byElim.map(([j]) => cellName(j)))}.`,
+      hl: { unit: u.cells, blk: blockers, cand: [...xs, ...byElim.map(([j]) => [j, d, 'x'])] } });
+  }
+  if (filled.length) {
+    steps.push({ text: `De övriga ${filled.length} rutorna i ${unitName(u)} är redan ifyllda. Hur många platser finns kvar för ${d}:an?`,
+      hl: { unit: u.cells, blk: blockers, cand: [...xs, ...byElim.map(([j]) => [j, d, 'x'])] } });
+  }
+  steps.push({ final: true, text: `Bara en ruta återstår: ${cellName(i)}. Där måste ${d}:an stå!`,
+    hl: { unit: u.cells, blk: blockers, tgt: [i], cand: [[i, d, 'em'], ...xs, ...byElim.map(([j]) => [j, d, 'x'])] } });
+  return { name: 'Gömd singel', where: unitName(u), i, d, steps, refs,
+    lesson: u.type === 'box' ? LESSONS.hiddenBox : LESSONS.hiddenLine };
+}
+
+function explainNaked(g, C, elimBy, i, d) {
+  const steps = [], refs = new Set(), gone = new Set();
+  const xsFor = () => [...gone].map(x => [i, x, 'x']);
+  steps.push({ text: `Titta på rutan ${cellName(i)}. Vilka siffror 1–9 kan stå här? Vi stryker de som redan finns runt omkring.`,
+    hl: { tgt: [i], cand: [1, 2, 3, 4, 5, 6, 7, 8, 9].map(x => [i, x, 'on']) } });
+  const groups = [['rad', UNITS[9 + ROW[i]]], ['kolumn', UNITS[18 + COL[i]]], ['box', UNITS[BOX[i]]]];
+  for (const [label, u] of groups) {
+    const have = u.cells.filter(j => g[j]);
+    const newDigits = [...new Set(have.map(j => g[j]))].filter(x => !gone.has(x)).sort();
+    newDigits.forEach(x => gone.add(x));
+    const remain = [1, 2, 3, 4, 5, 6, 7, 8, 9].filter(x => !gone.has(x));
+    steps.push({
+      text: label === 'box'
+        ? `I ${unitName(u)} finns ${listSv([...new Set(have.map(j => g[j]))].sort().map(String))}. ${newDigits.length ? `Nya att stryka: ${listSv(newDigits.map(String))}.` : 'Inget nytt att stryka.'} Kvar: ${listSv(remain.map(String))}.`
+        : `${label === 'rad' ? 'Rad' : 'Kolumn'} ${u.n + 1} har redan ${listSv([...new Set(have.map(j => g[j]))].sort().map(String))}. ${newDigits.length ? `Stryk ${listSv(newDigits.map(String))}.` : 'Inget nytt att stryka.'} Kvar: ${listSv(remain.map(String))}.`,
+      hl: { unit: u.cells, blk: have.filter(j => newDigits.includes(g[j])), tgt: [i],
+        cand: [...remain.map(x => [i, x, 'on']), ...xsFor()] } });
+  }
+  const extra = [...digitsOf(~C[i] & 0x3FE)].filter(x => !gone.has(x));
+  if (extra.length) {
+    const st = [...new Set(extra.map(x => elimBy.get(i * 10 + x)))].sort((a, b) => a - b);
+    st.forEach(s => refs.add(s));
+    extra.forEach(x => gone.add(x));
+    steps.push({ text: `Från förberedelsen (steg ${listSv(st.map(String))}) kan ${listSv(extra.map(String))} inte heller stå här.`,
+      hl: { tgt: [i], cand: [[i, d, 'on'], ...xsFor()] } });
+  }
+  steps.push({ final: true, text: `Av 1–9 är bara ${d} kvar. Alltså är ${cellName(i)} = ${d}!`,
+    hl: { tgt: [i], cand: [[i, d, 'em'], ...xsFor()] } });
+  return { name: 'Ensam kandidat', where: cellName(i), i, d, steps, refs, lesson: LESSONS.naked };
+}
+
+function findElimination(g, C) {
+  // Pointing: a digit's spots inside a box all share one row/column.
+  for (let b = 0; b < 9; b++) {
+    const box = UNITS[b];
+    for (let d = 1; d <= 9; d++) {
+      const spots = box.cells.filter(j => C[j] & (1 << d));
+      if (spots.length < 2) continue;
+      for (const [key, lineIdx, label] of [[ROW, 9, 'rad'], [COL, 18, 'kolumn']]) {
+        if (!spots.every(j => key[j] === key[spots[0]])) continue;
+        const line = UNITS[lineIdx + key[spots[0]]];
+        const removed = line.cells.filter(j => BOX[j] !== b && C[j] & (1 << d)).map(j => [j, d]);
+        if (!removed.length) continue;
+        return { name: 'Pekande par', removed, lesson: LESSONS.pointing,
+          text: `I ${unitName(box)} kan ${d}:an bara stå på ${listSv(spots.map(cellName))} — alla i ${label} ${line.n + 1}. ${d}:an i boxen hamnar alltså i ${label} ${line.n + 1}, och då kan ${d} inte stå någon annanstans i ${label} ${line.n + 1}.`,
+          hl: { unit: box.cells, cand: [...spots.map(j => [j, d, 'em']), ...removed.map(([j]) => [j, d, 'x'])] } };
+      }
+    }
+  }
+  // Claiming / box-line: a digit's spots in a row/column all lie in one box.
+  for (let u = 9; u < 27; u++) {
+    const line = UNITS[u];
+    for (let d = 1; d <= 9; d++) {
+      const spots = line.cells.filter(j => C[j] & (1 << d));
+      if (spots.length < 2 || !spots.every(j => BOX[j] === BOX[spots[0]])) continue;
+      const box = UNITS[BOX[spots[0]]];
+      const removed = box.cells.filter(j => !line.cells.includes(j) && C[j] & (1 << d)).map(j => [j, d]);
+      if (!removed.length) continue;
+      return { name: 'Rad/box-låsning', removed, lesson: LESSONS.claiming,
+        text: `I ${unitName(line)} kan ${d}:an bara stå på ${listSv(spots.map(cellName))} — alla inne i ${unitName(box)}. Boxens ${d}:a måste alltså vara en av dem, så ${d} kan inte stå i boxens övriga rutor.`,
+        hl: { unit: line.cells, cand: [...spots.map(j => [j, d, 'em']), ...removed.map(([j]) => [j, d, 'x'])] } };
+    }
+  }
+  // Naked pair.
+  for (const u of UNITS) {
+    const twos = u.cells.filter(j => !g[j] && popcount(C[j]) === 2);
+    for (let a = 0; a < twos.length; a++) for (let b = a + 1; b < twos.length; b++) {
+      const m = C[twos[a]]; if (C[twos[b]] !== m) continue;
+      const ds = digitsOf(m), removed = [];
+      for (const j of u.cells) if (j !== twos[a] && j !== twos[b]) for (const d of ds) if (C[j] & (1 << d)) removed.push([j, d]);
+      if (!removed.length) continue;
+      return { name: 'Nakna par', removed, lesson: LESSONS.pair,
+        text: `${cellName(twos[a])} och ${cellName(twos[b])} kan båda bara vara ${ds[0]} eller ${ds[1]}. De två siffrorna måste alltså hamna i just de två rutorna, så ingen annan ruta i ${unitName(u)} kan vara ${ds[0]} eller ${ds[1]}.`,
+        hl: { unit: u.cells, cand: [...ds.flatMap(d => [[twos[a], d, 'em'], [twos[b], d, 'em']]), ...removed.map(([j, d]) => [j, d, 'x'])] } };
+    }
+  }
+  return null;
+}
+
+function buildHint(g) {
+  const C = baseCands(g), elims = [], elimBy = new Map();
+  for (let round = 0; round < 40; round++) {
+    const s = findSingle(g, C, elimBy);
+    if (s) {
+      const used = Math.max(0, ...[...s.refs].filter(Boolean));
+      return { single: s, elims: elims.slice(0, used) };
+    }
+    const e = findElimination(g, C);
+    if (!e) return null;
+    elims.push(e);
+    for (const [j, d] of e.removed) { C[j] &= ~(1 << d); if (!elimBy.has(j * 10 + d)) elimBy.set(j * 10 + d, elims.length); }
+  }
+  return null;
+}
+
+// ---- hint panel
+const hintPanel = document.getElementById('hintPanel'), hintStepsEl = document.getElementById('hintSteps');
+const hintTitle = document.getElementById('hintTitle'), hintLesson = document.getElementById('hintLesson');
+const nextStepBtn = document.getElementById('nextStepBtn'), applyHintBtn = document.getElementById('applyHintBtn');
+let hint = null, currentHL = null;
+
+function applyHL(hl) {
+  currentHL = hl;
+  wraps.forEach(w => w.classList.remove('u', 'blk', 'tgt'));
+  if (!hl) { renderCands(); return; }
+  (hl.unit || []).forEach(i => wraps[i].classList.add('u'));
+  (hl.blk || []).forEach(i => wraps[i].classList.add('blk'));
+  (hl.tgt || []).forEach(i => wraps[i].classList.add('tgt'));
+  renderCands(hl.cand);
+}
+
+function hintClick() {
+  if (hint) { if (hint.shown < hint.steps.length) { hint.shown++; hint.active = hint.shown - 1; renderHint(); } return; }
+  const a = analyse(); if (!a) return;
+  const cur = readGrid();
+  const wrong = cur.findIndex((v, i) => v && !a.givens[i] && v !== a.solution[i]);
+  if (wrong >= 0) {
+    wraps[wrong].classList.add('conflict'); cells[wrong].focus();
+    setStatus(`Först en sak: ${cellName(wrong)} är fel. Sudda den och tänk om!`, 'err'); return;
+  }
+  if (!cur.includes(0)) { setStatus('Rutnätet är redan fullt.', 'ok'); return; }
+  const h = buildHint(cur);
+  let steps, title, lesson, place;
+  if (h) {
+    const prep = h.elims.map(e => ({ prep: true, text: `Förberedelse — ${e.name}: ${e.text}`, hl: e.hl }));
+    steps = [...prep, ...h.single.steps];
+    title = `${h.single.name} <small>${h.elims.length ? '+ ' + [...new Set(h.elims.map(e => e.name.toLowerCase()))].join(', ') : ''}</small>`;
+    lesson = [...new Set([...h.elims.map(e => e.lesson), h.single.lesson])].join('<br><br>');
+    place = { i: h.single.i, d: h.single.d };
+  } else {
+    // No technique in this toolbox works: fall back to revealing the most constrained cell.
+    const C = baseCands(cur);
+    let best = -1; for (let i = 0; i < 81; i++) if (!cur[i] && (best < 0 || popcount(C[i]) < popcount(C[best]))) best = i;
+    const d = a.solution[best];
+    steps = [
+      { text: `Det här läget kräver avancerade tekniker (t.ex. X-wing eller kedjor) som den här hjälpen inte förklarar än. Titta på ${cellName(best)} — den har bara ${listSv(digitsOf(C[best]).map(String))} kvar som möjliga.`,
+        hl: { tgt: [best], cand: digitsOf(C[best]).map(x => [best, x, 'on']) } },
+      { final: true, text: `Svaret i ${cellName(best)} är ${d}.`, hl: { tgt: [best], cand: [[best, d, 'em']] } }];
+    title = 'Svårt läge'; lesson = 'Tips: slå på "Visa kandidater" och leta efter mönster mellan rader och kolumner.';
+    place = { i: best, d };
+  }
+  hint = { steps, title, lesson, place, shown: 1, active: 0 };
+  setStatus('');
+  renderHint();
+}
+
+function renderHint() {
+  hintPanel.hidden = false;
+  hintTitle.innerHTML = hint.title;
+  hintStepsEl.innerHTML = '';
+  hint.steps.slice(0, hint.shown).forEach((s, k) => {
+    const li = document.createElement('li');
+    li.textContent = s.text;
+    if (s.prep) li.classList.add('prep');
+    if (s.final) li.classList.add('final');
+    if (k === hint.active) li.classList.add('active');
+    li.onclick = () => { hint.active = k; renderHint(); };
+    hintStepsEl.appendChild(li);
+  });
+  const done = hint.shown >= hint.steps.length;
+  nextStepBtn.disabled = done;
+  nextStepBtn.textContent = hint.shown === hint.steps.length - 1 ? 'Visa svaret' : 'Nästa steg';
+  applyHintBtn.hidden = !done;
+  hintLesson.hidden = !done;
+  hintLesson.innerHTML = '<strong>Vad du lärde dig:</strong><br>' + hint.lesson;
+  applyHL(hint.steps[hint.active].hl);
+}
+
+function closeHint() {
+  if (!hint) return;
+  hint = null; hintPanel.hidden = true; applyHL(null);
+}
+
+nextStepBtn.onclick = hintClick;
+applyHintBtn.onclick = () => {
+  const { i, d } = hint.place;
+  closeHint();
+  setCell(i, String(d), 'hinted'); afterEdit(); cells[i].focus();
+  setStatus(`${cellName(i)} = ${d}. Tryck Ledtråd igen för nästa drag.`, 'ok');
+};
+document.getElementById('hintClose').onclick = closeHint;
+document.getElementById('hintBtn').onclick = hintClick;
+document.getElementById('solveBtn').onclick = solve;
+document.getElementById('checkBtn').onclick = check;
+document.getElementById('clearSolBtn').onclick = () => {
+  cells.forEach((el, i) => { if (el.classList.contains('solved') || el.classList.contains('hinted')) setCell(i, ''); });
+  afterEdit();
+};
+document.getElementById('clearBtn').onclick = () => { cells.forEach((_, i) => setCell(i, '')); afterEdit(); };
+document.getElementById('exampleBtn').onclick = () => {
+  const p = '530070000600195000098000060800060003400803001700020006060000280000419005000080079';
+  [...p].forEach((ch, i) => setCell(i, ch === '0' ? '' : ch)); afterEdit();
+};
+
+// ================================================================ Photo import
+const drop = document.getElementById('drop'), fileInput = document.getElementById('fileInput');
+const photoArea = document.getElementById('photoArea'), pc = document.getElementById('photoCanvas');
+const pctx = pc.getContext('2d'), photoStatus = document.getElementById('photoStatus');
+const progressEl = document.getElementById('progress');
+let img = null, gray = null, W = 0, H = 0, corners = null, dragIdx = -1;
+
+drop.onclick = () => fileInput.click();
+fileInput.onchange = () => fileInput.files[0] && loadImage(fileInput.files[0]);
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+drop.ondragleave = () => drop.classList.remove('over');
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); const f = e.dataTransfer.files[0]; if (f) loadImage(f); };
+window.addEventListener('paste', e => {
+  const item = [...(e.clipboardData?.items || [])].find(it => it.type.startsWith('image/'));
+  if (item) { e.preventDefault(); loadImage(item.getAsFile()); }
+});
+
+function photoMsg(msg, kind) { photoStatus.textContent = msg; photoStatus.className = 'status' + (kind ? ' ' + kind : ''); }
+
+function loadImage(file) {
+  const url = URL.createObjectURL(file);
+  const im = new Image();
+  im.onload = () => {
+    const scale = Math.min(1, 1200 / Math.max(im.width, im.height));
+    W = Math.round(im.width * scale); H = Math.round(im.height * scale);
+    const c = document.createElement('canvas'); c.width = W; c.height = H;
+    const cx = c.getContext('2d'); cx.drawImage(im, 0, 0, W, H);
+    img = c;
+    const d = cx.getImageData(0, 0, W, H).data;
+    gray = new Float32Array(W * H);
+    for (let i = 0; i < W * H; i++) gray[i] = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2];
+    pc.width = W; pc.height = H;
+    photoArea.style.display = 'block';
+    autoDetect();
+    URL.revokeObjectURL(url);
+  };
+  im.onerror = () => alert('Kunde inte öppna bilden.');
+  im.src = url;
+}
+
+// Adaptive threshold: a pixel is "ink" if notably darker than its neighbourhood mean.
+function adaptiveThreshold(g, w, h, win, C) {
+  const integ = new Float64Array((w + 1) * (h + 1));
+  for (let y = 0; y < h; y++) {
+    let rowSum = 0;
+    for (let x = 0; x < w; x++) {
+      rowSum += g[y * w + x];
+      integ[(y + 1) * (w + 1) + x + 1] = integ[y * (w + 1) + x + 1] + rowSum;
+    }
+  }
+  const out = new Uint8Array(w * h), r = win >> 1;
+  for (let y = 0; y < h; y++) {
+    const y0 = Math.max(0, y - r), y1 = Math.min(h, y + r + 1);
+    for (let x = 0; x < w; x++) {
+      const x0 = Math.max(0, x - r), x1 = Math.min(w, x + r + 1);
+      const s = integ[y1 * (w + 1) + x1] - integ[y0 * (w + 1) + x1] - integ[y1 * (w + 1) + x0] + integ[y0 * (w + 1) + x0];
+      out[y * w + x] = g[y * w + x] < s / ((x1 - x0) * (y1 - y0)) - C ? 1 : 0;
+    }
+  }
+  return out;
+}
+
+// Connected components (4-neighbour) over a binary image. Calls fn(pixelList) for each component.
+function components(bin, w, h, fn, x0 = 0, y0 = 0, x1 = w, y1 = h) {
+  const seen = new Uint8Array(w * h), stack = [];
+  for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+    const s = y * w + x;
+    if (!bin[s] || seen[s]) continue;
+    const px = []; stack.push(s); seen[s] = 1;
+    while (stack.length) {
+      const p = stack.pop(); px.push(p);
+      const py = (p / w) | 0, pxx = p - py * w;
+      if (pxx > x0 && bin[p - 1] && !seen[p - 1]) { seen[p - 1] = 1; stack.push(p - 1); }
+      if (pxx < x1 - 1 && bin[p + 1] && !seen[p + 1]) { seen[p + 1] = 1; stack.push(p + 1); }
+      if (py > y0 && bin[p - w] && !seen[p - w]) { seen[p - w] = 1; stack.push(p - w); }
+      if (py < y1 - 1 && bin[p + w] && !seen[p + w]) { seen[p + w] = 1; stack.push(p + w); }
+    }
+    fn(px);
+  }
+}
+
+// The grid is (almost always) the biggest connected blob of ink; its extreme points are the corners.
+function autoDetect() {
+  const win = Math.max(15, (Math.min(W, H) / 25) | 1);
+  const bin = adaptiveThreshold(gray, W, H, win, 8);
+  let best = null, bestArea = 0;
+  components(bin, W, H, px => {
+    if (px.length < 200) return;
+    let minX = W, maxX = 0, minY = H, maxY = 0;
+    for (const p of px) { const y = (p / W) | 0, x = p - y * W; if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y; }
+    const area = (maxX - minX) * (maxY - minY);
+    if (area > bestArea) { bestArea = area; best = px; }
+  });
+  if (best && bestArea > W * H * 0.05) {
+    let tl, tr, br, bl, sMin = Infinity, sMax = -Infinity, dMin = Infinity, dMax = -Infinity;
+    for (const p of best) {
+      const y = (p / W) | 0, x = p - y * W, s = x + y, d = x - y;
+      if (s < sMin) { sMin = s; tl = [x, y]; } if (s > sMax) { sMax = s; br = [x, y]; }
+      if (d > dMax) { dMax = d; tr = [x, y]; } if (d < dMin) { dMin = d; bl = [x, y]; }
+    }
+    corners = [tl, tr, br, bl];
+    photoMsg('Rutnätet hittat — justera hörnen om de inte sitter rätt och läs sedan in siffrorna.');
+  } else {
+    const m = Math.min(W, H) * 0.1;
+    corners = [[m, m], [W - m, m], [W - m, H - m], [m, H - m]];
+    photoMsg('Hittade inte rutnätet automatiskt — dra hörnen till rätt plats.', 'err');
+  }
+  drawPhoto();
+}
+
+function drawPhoto() {
+  pctx.drawImage(img, 0, 0);
+  const lw = Math.max(2, W / 300), r = Math.max(8, W / 70);
+  pctx.lineWidth = lw; pctx.strokeStyle = '#2f6fde'; pctx.fillStyle = 'rgba(47,111,222,0.12)';
+  pctx.beginPath(); corners.forEach(([x, y], k) => k ? pctx.lineTo(x, y) : pctx.moveTo(x, y)); pctx.closePath();
+  pctx.fill(); pctx.stroke();
+  pctx.lineWidth = lw / 2; pctx.strokeStyle = 'rgba(47,111,222,0.6)';
+  for (let k = 1; k < 9; k++) {
+    const t = k / 9;
+    const a = lerp2(corners[0], corners[1], t), b = lerp2(corners[3], corners[2], t);
+    const c = lerp2(corners[0], corners[3], t), d = lerp2(corners[1], corners[2], t);
+    pctx.beginPath(); pctx.moveTo(...a); pctx.lineTo(...b); pctx.moveTo(...c); pctx.lineTo(...d); pctx.stroke();
+  }
+  corners.forEach(([x, y]) => {
+    pctx.beginPath(); pctx.arc(x, y, r, 0, Math.PI * 2);
+    pctx.fillStyle = '#2f6fde'; pctx.fill(); pctx.lineWidth = lw; pctx.strokeStyle = '#fff'; pctx.stroke();
+  });
+}
+const lerp2 = (p, q, t) => [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t];
+
+function canvasPoint(e) {
+  const rect = pc.getBoundingClientRect();
+  return [(e.clientX - rect.left) * W / rect.width, (e.clientY - rect.top) * H / rect.height];
+}
+pc.addEventListener('pointerdown', e => {
+  if (!corners) return;
+  const [x, y] = canvasPoint(e);
+  let bestD = Infinity;
+  corners.forEach(([cx, cy], k) => { const d = Math.hypot(cx - x, cy - y); if (d < bestD) { bestD = d; dragIdx = k; } });
+  const rect = pc.getBoundingClientRect();
+  if (bestD > 60 * W / rect.width) { dragIdx = -1; return; }
+  pc.setPointerCapture(e.pointerId);
+});
+pc.addEventListener('pointermove', e => {
+  if (dragIdx < 0) return;
+  const [x, y] = canvasPoint(e);
+  corners[dragIdx] = [Math.max(0, Math.min(W, x)), Math.max(0, Math.min(H, y))];
+  drawPhoto();
+});
+pc.addEventListener('pointerup', () => { dragIdx = -1; });
+document.getElementById('autoBtn').onclick = () => img && autoDetect();
+
+// Homography mapping square (0..S) → the quad, then sample the gray image (bilinear).
+function homography(src, dst) {
+  const A = [], b = [];
+  for (let k = 0; k < 4; k++) {
+    const [x, y] = src[k], [u, v] = dst[k];
+    A.push([x, y, 1, 0, 0, 0, -u * x, -u * y]); b.push(u);
+    A.push([0, 0, 0, x, y, 1, -v * x, -v * y]); b.push(v);
+  }
+  for (let i = 0; i < 8; i++) {
+    let piv = i;
+    for (let r = i + 1; r < 8; r++) if (Math.abs(A[r][i]) > Math.abs(A[piv][i])) piv = r;
+    [A[i], A[piv]] = [A[piv], A[i]]; [b[i], b[piv]] = [b[piv], b[i]];
+    for (let r = 0; r < 8; r++) {
+      if (r === i) continue;
+      const f = A[r][i] / A[i][i];
+      for (let c = i; c < 8; c++) A[r][c] -= f * A[i][c];
+      b[r] -= f * b[i];
+    }
+  }
+  return b.map((v, i) => v / A[i][i]);
+}
+function warp(S) {
+  const h = homography([[0, 0], [S, 0], [S, S], [0, S]], corners);
+  const out = new Float32Array(S * S);
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const den = h[6] * x + h[7] * y + 1;
+    const sx = (h[0] * x + h[1] * y + h[2]) / den, sy = (h[3] * x + h[4] * y + h[5]) / den;
+    const x0 = Math.floor(sx), y0 = Math.floor(sy);
+    if (x0 < 0 || y0 < 0 || x0 >= W - 1 || y0 >= H - 1) { out[y * S + x] = 255; continue; }
+    const fx = sx - x0, fy = sy - y0, p = y0 * W + x0;
+    out[y * S + x] = gray[p] * (1 - fx) * (1 - fy) + gray[p + 1] * fx * (1 - fy) + gray[p + W] * (1 - fx) * fy + gray[p + W + 1] * fx * fy;
+  }
+  return out;
+}
+
+let worker = null;
+async function getWorker() {
+  if (worker) return worker;
+  if (!window.Tesseract) throw new Error('OCR-biblioteket kunde inte laddas (det behöver internet första gången).');
+  photoMsg('Laddar sifferigenkänning (bara första gången)…');
+  worker = await Tesseract.createWorker('eng');
+  await worker.setParameters({ tessedit_char_whitelist: '123456789', tessedit_pageseg_mode: '10' });
+  return worker;
+}
+
+// Pick the digit blob inside a cell (ignoring grid-line fragments), return a clean black-on-white canvas or null.
+function extractDigit(bin, S, r, c) {
+  const cs = S / 9, m = Math.round(cs * 0.1);
+  const x0 = Math.round(c * cs) + m, y0 = Math.round(r * cs) + m, x1 = Math.round((c + 1) * cs) - m, y1 = Math.round((r + 1) * cs) - m;
+  let best = null, bestScore = 0, bb = null;
+  components(bin, S, S, px => {
+    if (px.length < cs * cs * 0.015) return;
+    let minX = S, maxX = 0, minY = S, maxY = 0;
+    for (const p of px) { const y = (p / S) | 0, x = p - y * S; if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y; }
+    const bw = maxX - minX + 1, bh = maxY - minY + 1;
+    if (bh < cs * 0.28 || bw > cs * 0.75 || bh > cs * 0.85) return;
+    const cx = (minX + maxX) / 2 - c * cs, cy = (minY + maxY) / 2 - r * cs;
+    if (cx < cs * 0.2 || cx > cs * 0.8 || cy < cs * 0.2 || cy > cs * 0.8) return;
+    if (px.length > bestScore) { bestScore = px.length; best = px; bb = [minX, minY, bw, bh]; }
+  }, x0, y0, x1, y1);
+  if (!best) return null;
+  const [bx, by, bw, bh] = bb, size = 64, target = 40, sc = target / bh;
+  const out = document.createElement('canvas'); out.width = size; out.height = size;
+  const ox = out.getContext('2d'); ox.fillStyle = '#fff'; ox.fillRect(0, 0, size, size);
+  const tmp = document.createElement('canvas'); tmp.width = bw; tmp.height = bh;
+  const tx = tmp.getContext('2d'), id = tx.createImageData(bw, bh);
+  id.data.fill(255);
+  for (const p of best) {
+    const y = (p / S) | 0, x = p - y * S, q = ((y - by) * bw + (x - bx)) * 4;
+    id.data[q] = id.data[q + 1] = id.data[q + 2] = 0;
+  }
+  tx.putImageData(id, 0, 0);
+  ox.imageSmoothingEnabled = true;
+  ox.drawImage(tmp, (size - bw * sc) / 2, (size - target) / 2, bw * sc, target);
+  return out;
+}
+
+// Different Tesseract page-segmentation modes fail on different digits (e.g. mode 10 often misses "6"),
+// so try several and keep the most confident answer.
+async function ocrDigit(w, canvas) {
+  let best = { digit: 0, conf: 0 };
+  for (const psm of ['10', '8', '13', '6']) {
+    await w.setParameters({ tessedit_pageseg_mode: psm });
+    const { data } = await w.recognize(canvas);
+    const d = (data.text.match(/[1-9]/) || [])[0];
+    if (d && data.confidence > best.conf) best = { digit: +d, conf: data.confidence };
+    if (best.conf >= 80) break;
+  }
+  return best;
+}
+
+document.getElementById('readBtn').onclick = async () => {
+  if (!corners) return;
+  const btn = document.getElementById('readBtn'); btn.disabled = true;
+  try {
+    const S = 450;
+    const warped = warp(S);
+    const bin = adaptiveThreshold(warped, S, S, 25, 10);
+    const jobs = [];
+    for (let r = 0; r < 9; r++) for (let c = 0; c < 9; c++) {
+      const canvas = extractDigit(bin, S, r, c);
+      if (canvas) jobs.push({ i: r * 9 + c, canvas });
+    }
+    if (!jobs.length) { photoMsg('Hittade inga siffror innanför hörnen — justera dem och försök igen.', 'err'); return; }
+    const w = await getWorker();
+    progressEl.style.display = 'block'; progressEl.value = 0;
+    const results = new Array(81).fill(0), lowConf = new Set();
+    for (let k = 0; k < jobs.length; k++) {
+      photoMsg(`Läser siffra ${k + 1} av ${jobs.length}…`);
+      const { digit, conf } = await ocrDigit(w, jobs[k].canvas);
+      if (digit) { results[jobs[k].i] = digit; if (conf < 70) lowConf.add(jobs[k].i); }
+      else lowConf.add(jobs[k].i);
+      progressEl.value = (k + 1) / jobs.length;
+    }
+    results.forEach((v, i) => setCell(i, v ? String(v) : ''));
+    afterEdit();
+    lowConf.forEach(i => wraps[i].classList.add('lowconf'));
+    const res = solveGrid(results, 2);
+    const note = lowConf.size ? ` ${lowConf.size} osäker${lowConf.size > 1 ? 'a' : ''} ruta${lowConf.size > 1 ? 'or' : ''} markerade gula.` : '';
+    if (findConflicts(results).size || !res.count)
+      photoMsg(`Läste ${jobs.length} siffror, men pusslet går inte ihop än — rätta de felinlästa rutorna.${note}`, 'err');
+    else photoMsg(`Läste ${jobs.length} siffror.${note} Jämför med bilden och tryck sedan Ledtråd eller Lös.`, 'ok');
+  } catch (err) {
+    console.error(err); photoMsg(err.message || String(err), 'err');
+  } finally {
+    btn.disabled = false; progressEl.style.display = 'none';
+  }
+};
+</script>
+</body>
+</html>
